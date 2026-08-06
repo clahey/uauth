@@ -97,14 +97,6 @@ mechanism* under Key Design Decisions.
 
 Features or responsibilities uauth does not build or take on.
 
-- Running uauth-service itself as a traditional always-on process (e.g. a
-  long-lived container or VM-hosted server) is out of scope (see Goals). This
-  doesn't constrain how a consuming project runs its own business logic
-  server — uauth's verification API is called via IAM/SigV4, which any
-  AWS-credentialed caller can do whether it's a Lambda or a traditional
-  long-running server; a consuming project's architecture is its own choice
-  (see *Building or maintaining any individual consuming project's business
-  logic server* below).
 - Guaranteed portability across cloud providers is not a requirement. Code that is
   reasonably reusable elsewhere is a bonus, not a design driver.
 - Role-based / org / team / admin-hierarchy authorization is not needed by any
@@ -114,8 +106,11 @@ Features or responsibilities uauth does not build or take on.
 - Building or maintaining any individual consuming project's business logic server
   (e.g. the existing GraphQL project) is out of scope of uauth itself — uauth is
   the shared authentication layer those servers integrate with. uauth is agnostic
-  to that server's own client-facing API paradigm (REST, GraphQL, or otherwise);
-  like authorization, that choice belongs entirely to each consuming project.
+  to that server's own architecture (serverless or a traditional long-running
+  process — uauth's verification API is called via IAM/SigV4, which any
+  AWS-credentialed caller can do either way) and its client-facing API paradigm
+  (REST, GraphQL, or otherwise); like authorization, these choices belong
+  entirely to each consuming project.
 - Implementing, bundling, or providing an integration API for any authorization
   mechanism (a relationship/policy engine, or hand-rolled checks) is out of scope.
   Authorization is each consuming project's own decision, built directly on

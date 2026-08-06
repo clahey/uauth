@@ -14,14 +14,12 @@ all of them converge on the same backend contract: the client obtains proof
 of identity for that method, hands it to uauth in one call, and login-methods
 verifies it and requests a new session from sessions.
 
-Login is exposed as one concrete client function per supported method (e.g.
-`loginWithGoogle()`) rather than a single generic, pluggable `login(method,
-...)` entry point, since the set of supported methods is closed and owned by
-uauth itself — not something a consuming project supplies its own
-implementation of. Verification of each method's proof is uauth's own
-internal strategy per method (JWKS check, password hash check, OTP check,
-WebAuthn verification); this is an implementation detail, not exposed
-integration surface.
+The set of supported login methods is closed and owned by uauth itself — not
+something a consuming project supplies its own implementation of or extends.
+Verification of each method's proof is uauth's own internal strategy per
+method (JWKS check, password hash check, OTP check, WebAuthn verification);
+this is an implementation detail, not exposed integration surface. See
+client-sdk § Key Design Decisions for the client-facing consequence of this.
 
 ## Supported methods
 
@@ -83,11 +81,27 @@ failed — the client's only actionable response is to re-attempt the method's
 ceremony, and a detailed reason would help an attacker tune a malicious
 token.
 
+## Interface
+
+Each supported method has its own login endpoint, part of uauth-service's
+public surface (see uauth-service § API surfaces). Only Google is defined
+for MVP; the others get their own endpoint once the corresponding method is
+designed (see Open Questions).
+
+| Endpoint | Method | Auth | Request | Response |
+|---|---|---|---|---|
+| `/login/google` | POST | none | `{ idToken: string }` | Success: `{ accessToken: string, refreshToken: string, user: { userId: string, name?: string, picture?: string, email?: string } }`. Failure: `{ error: "authentication_failed" }` (see Verification flow for why this reason is deliberately generic). |
+
+`user` in the success response is the pass-through profile data described in
+client-sdk — captured once at login from the method's own claims, not
+re-fetched on later calls. `accessToken` and `refreshToken` are as described
+in uauth-service/sessions.
+
 ## Decisions & Alternatives
 
 | Decision | Chosen | Alternatives Considered | Rationale |
 |---|---|---|---|
-| Client login surface shape | One concrete function per supported method (`loginWithGoogle()`, etc.) | A single generic, pluggable `login(method, ...)` entry point | The set of supported methods is closed and owned by uauth, not extended by consuming projects — a generic pluggable entry point implies extensibility that doesn't exist. |
+| Ownership of the supported-method set | Closed set, owned by uauth itself | Allow consuming projects to register/extend custom login methods | Matches the *Minimal, stable identity surface* Tenet — no bespoke integration APIs. A per-project-extensible method set would mean uauth verifying arbitrary consuming-project-supplied logic, exactly the kind of bespoke surface the project avoids. |
 
 ## Open Questions & Future Decisions
 

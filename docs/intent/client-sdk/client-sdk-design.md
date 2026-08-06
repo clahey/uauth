@@ -16,10 +16,10 @@ covers the contract itself.
 
 ## Shared contract
 
-- One concrete function per supported login method (e.g. `loginWithGoogle()`;
-  see uauth-service/login-methods for why this is per-method functions
-  rather than a generic, pluggable `login(method, ...)` entry point), plus
-  `logout()`.
+- One concrete function per supported login method (e.g. `loginWithGoogle()`),
+  plus `logout()`. See Key Design Decisions below for why this is per-method
+  functions rather than a generic, pluggable `login(method, ...)` entry
+  point.
 - `getCurrentUser()` — returns display information for the current user. For
   now this is a pass-through of whatever the login provider supplies (e.g.
   Google's `name`, `picture`, `email` claims) — no custom-settable profile
@@ -38,6 +38,23 @@ covers the contract itself.
   native HTTP client, not a uauth-owned primitive or a single cross-platform
   implementation.
 
+## Interface
+
+Language-agnostic contract; see android and web for the idiomatic signature
+in each platform's language.
+
+| Function | Params | Returns | Notes |
+|---|---|---|---|
+| `loginWithGoogle` | none | Success: a `CurrentUser`. Failure: nothing — a "not logged in" outcome, not an exception (see android § Login failure and recovery for the reasoning, which applies to web too). | See Key Design Decisions above for why this is a dedicated function per method. |
+| `logout` | none | nothing | Clears local state regardless of whether the server call succeeds. |
+| `getCurrentUser` | none | a `CurrentUser` if logged in, otherwise nothing | Synchronous — reads profile data cached at login, no network call. |
+| `getToken` | none | a valid access token string if logged in, otherwise nothing | Asynchronous — refreshes transparently if the cached access token is stale. Returns nothing if the session is dead (refresh failed), signaling the caller to treat the user as logged out. |
+
+`CurrentUser` shape: `{ userId: string, name?: string, picture?: string, email?: string }` — the pass-through provider profile claims described in Shared contract above.
+
+Link/unlink and the optional HTTP-request-wrapper convenience aren't
+specified yet — see Shared contract and Open Questions.
+
 ## Children
 
 - **android** — Kotlin, for the Android app.
@@ -46,6 +63,26 @@ covers the contract itself.
 Future client surfaces (desktop via Compose Multiplatform, iOS — UI approach
 undecided) are anticipated but not yet in scope (see root HLD § Target
 Users).
+
+## Key Design Decisions
+
+### Client login surface shape: one function per method, not a generic entry point
+
+The client SDK exposes one concrete function per supported login method
+(`loginWithGoogle()`, etc.) rather than a single generic, pluggable
+`login(method, ...)` entry point.
+
+**Alternatives considered:**
+
+- **Generic pluggable `login(method, ...)` entry point** — rejected. This
+  shape implies a consuming project could supply its own login method
+  implementation, but the set of supported methods is closed and owned by
+  uauth itself (see uauth-service/login-methods) — there's nothing to plug
+  in.
+
+**Rationale:** matching the actual extensibility model (none) keeps the
+client API honest about what it does — a generic entry point would invite an
+integration pattern that doesn't exist.
 
 ## Open Questions & Future Decisions
 

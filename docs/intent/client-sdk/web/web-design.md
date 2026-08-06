@@ -8,8 +8,7 @@ prefix: CLIENT-WEB
 ## Context and Design Philosophy
 
 The web client SDK implements the client-sdk contract in TypeScript for the
-JS/TS web frontend. It is the first client SDK to reach MVP, alongside
-android and server-sdk.
+JS/TS web frontend. It reaches MVP alongside android and server-sdk.
 
 ## Google login ceremony
 
@@ -54,6 +53,33 @@ the server already absorbs this race safely. Coordinating tabs to avoid the
 redundant refresh call in the first place (e.g. via `BroadcastChannel`) is a
 possible future efficiency improvement, not a correctness requirement — see
 Open Questions.
+
+## Interface
+
+TypeScript signatures implementing the client-sdk contract:
+
+```typescript
+async function loginWithGoogle(): Promise<LoginResult>;
+async function logout(): Promise<void>;
+function getCurrentUser(): CurrentUser | null;
+async function getToken(): Promise<string | null>;
+
+type LoginResult =
+  | { ok: true; user: CurrentUser }
+  | { ok: false };
+
+interface CurrentUser {
+  userId: string;
+  name?: string;
+  picture?: string;
+  email?: string;
+}
+```
+
+`{ ok: false }` covers both a rejected/errored OIDC redirect (see CSRF
+protection and redirect errors above) and a server-side verification
+failure — both are the same "not logged in" outcome from the caller's
+perspective.
 
 ## Decisions & Alternatives
 

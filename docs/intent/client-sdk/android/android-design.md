@@ -8,8 +8,8 @@ prefix: CLIENT-ANDROID
 ## Context and Design Philosophy
 
 The Android client SDK implements the client-sdk contract in Kotlin for the
-Android app (Jetpack Compose UI). It is the first client SDK to reach MVP,
-alongside web and server-sdk.
+Android app (Jetpack Compose UI). It reaches MVP alongside web and
+server-sdk.
 
 ## Google login ceremony
 
@@ -39,6 +39,33 @@ the meantime (see uauth-service/sessions), the resulting "session not found"
 response (see login-methods § Verification flow) is treated the same way: a
 normal "not logged in" outcome that routes back to the login ceremony, not a
 crash or fatal error.
+
+## Interface
+
+Kotlin signatures implementing the client-sdk contract:
+
+```kotlin
+suspend fun loginWithGoogle(): LoginResult
+suspend fun logout()
+fun getCurrentUser(): CurrentUser?
+suspend fun getToken(): String?
+
+sealed interface LoginResult {
+    data class Success(val user: CurrentUser) : LoginResult
+    object Failed : LoginResult
+}
+
+data class CurrentUser(
+    val userId: String,
+    val name: String? = null,
+    val picture: String? = null,
+    val email: String? = null,
+)
+```
+
+`Failed` covers both a cancelled/missing Credential Manager result and a
+server-side verification failure — see Login failure and recovery above for
+why these collapse to the same outcome.
 
 ## Decisions & Alternatives
 

@@ -37,6 +37,16 @@ is derived per request from the bearer token in the incoming request's
 headers. Each supported server language's library (server-sdk) calls the
 verification surface and returns verified identity for the request.
 
+### Server-to-server verification interface
+
+| Endpoint | Method | Auth | Request | Response |
+|---|---|---|---|---|
+| `/verify` | POST | IAM (SigV4) | `{ accessToken: string }` | `{ valid: true, userId: string, ...claims }` if the token verifies; `{ valid: false }` otherwise. Never an HTTP error for an invalid token — "invalid" is an expected, routine outcome, not a fault (see server-sdk for how this maps onto `getCurrentUser`'s return shape). |
+
+Whether `...claims` includes full profile data or is just `userId` is still
+open — see sessions § Open Questions (*Whether server-side `getCurrentUser`
+needs full profile data...*).
+
 ## Abuse protection
 
 The two surfaces need different protection:

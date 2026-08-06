@@ -30,10 +30,13 @@ differently:
 
 ## Session record
 
-A session record holds: session ID, user ID, a hash of the refresh token
-(never the raw value, same principle as never storing a plaintext password),
-device/client metadata (for a "your active devices" view), created-at/
-last-used timestamps, and a revoked flag.
+A session record holds: session ID, user ID, a hash of the current refresh
+token plus a hash of the immediately-previous one with its supersession
+timestamp (never the raw token values, same principle as never storing a
+plaintext password — see Rotation concurrency and recovery for why one prior
+generation is kept), device/client metadata (for a "your active devices"
+view), created-at/last-used timestamps, a fixed expiration timestamp (see
+Retention), and a revoked flag.
 
 ## Rotation and revocation
 
@@ -57,13 +60,25 @@ realistically guessable (see uauth-service § Abuse protection).
 Two near-simultaneous refresh calls presenting the same token (e.g. a client
 retry racing the original request) are resolved with a conditional write:
 rotation updates the session's stored refresh-token hash only if it still
-matches the presented token, so only one of two concurrent calls can win.
-The loser doesn't get treated as theft outright — the *immediately-previous*
-refresh token remains acceptable for a short grace window after rotation,
-absorbing this exact race (and the equivalent multi-tab race in web) without
-false positives. A rotated-out token presented *outside* that grace window is
-treated as theft, and the session is revoked. The grace window's duration is
-a tuning parameter, not yet chosen (see Open Questions).
+matches the presented token, so only one of two concurrent calls can win and
+actually rotate.
+
+The loser isn't treated as theft. If the token it presents matches the
+session's stored *immediately-previous* hash and is within the grace window,
+the server doesn't rotate again — it returns the session's current refresh
+token (the one the winning call already produced) instead of minting a new
+one. Both calls converge on holding the identical current token; the client
+just stores whatever refresh token it's given, so this needs no special
+handling client-side. This convergence is what keeps the race from forking
+session state into two valid tokens, and it's why the session record keeps
+one prior generation (see Session record) rather than just the current
+token.
+
+A token presented *outside* the grace window, or more than one generation
+behind, doesn't get this treatment — a legitimate single owner would never
+present a token that stale, so it's treated as genuine reuse of a token
+that's supposed to be dead, and the session is revoked. The grace window's
+duration is a tuning parameter, not yet chosen (see Open Questions).
 
 If the client never receives the response carrying a freshly-rotated refresh
 token (a crash or dropped connection after the server-side write), no
@@ -74,11 +89,31 @@ refresh failure.
 
 ## Retention
 
+Each session has a fixed expiration timestamp set once at login — a long,
+flat TTL that rotation never resets, regardless of how often the session is
+used. An actively-used session still eventually requires a full re-login
+once the fixed window elapses; an abandoned session expires on the same
+schedule. This keeps expiration independent of any definition of "activity,"
+and applies uniformly across every login method rather than depending on any
+one method's friction (see Decisions & Alternatives for the full reasoning).
+
 Revoked and expired session records are removed via a DynamoDB TTL
 attribute, not an active cleanup job — the record is written with an
-expiration timestamp (session max lifetime, or revocation time plus a short
-retention window for audit purposes) and DynamoDB garbage-collects it
-natively.
+expiration timestamp (this fixed session lifetime, or, for a revoked
+session, revocation time plus a short retention window for audit purposes)
+and DynamoDB garbage-collects it natively.
+
+## Interface
+
+| Endpoint | Method | Auth | Request | Response |
+|---|---|---|---|---|
+| `/refresh` | POST | none (the refresh token itself is the credential) | `{ refreshToken: string }` | Success: `{ accessToken: string, refreshToken: string }` — the returned `refreshToken` is either newly-rotated or, in the grace-window case, the session's already-current one (see Rotation concurrency and recovery); the client always just stores whatever it's given. Failure: `{ error: "invalid_session" }` if the token is unknown, expired, or reused outside the grace window. |
+| `/logout` | POST | none (the refresh token itself is the credential) | `{ refreshToken: string }` | `{}` — revokes the session identified by the refresh token. Best-effort from the client's perspective: local state is cleared regardless of whether this call succeeds. |
+
+The access token returned by `/refresh` is a JWT whose payload includes at
+least `sub` (the user ID) and standard `exp`/`iat` claims; whether it also
+carries profile fields is pending the full-profile-vs-identity-only question
+below.
 
 ## Decisions & Alternatives
 
@@ -87,6 +122,7 @@ natively.
 | Refresh token format | Opaque random string, looked up against the sessions table | Self-contained JWT refresh token | A JWT refresh token can't be revoked before it naturally expires without an explicit revocation check on every use, which erases the "no DB lookup" benefit that motivates using a JWT in the first place. Refresh tokens live far longer than access tokens, so an unrevocable window is a much larger risk here than for access tokens. An opaque token forces a server-side lookup on every refresh, which is acceptable because refresh happens rarely (roughly once per access-token TTL) rather than on every request — and that lookup is also the natural place to add rotation and reuse detection, giving instant, reliable revocation exactly where it matters most. |
 | Concurrent-refresh handling | Conditional write + short grace window accepting the immediately-previous token | Treat any reuse of a rotated-out token as theft, no grace window | A hard "any reuse is theft" rule produces false positives from ordinary retries and multi-tab clients, which are expected, benign traffic, not attacks — a short grace window absorbs those while still catching reuse far outside any plausible retry timing. |
 | Session record cleanup | DynamoDB TTL attribute (native expiry) | An active/scheduled cleanup job | Native TTL requires no additional infrastructure or scheduled compute, consistent with the project's cheap-ops goal. |
+| Session expiration model | Long, fixed TTL set at login, not extended by activity or rotation | Sliding TTL, reset on each rotation | Sliding TTL's cost — defining "activity," resetting expiration on every rotation, reasoning about when a session actually dies — doesn't depend on login method, but its benefit (never bothering an active user) does: it matters most when re-login is painful (passwords, MFA) and least when it's cheap (Google's native picker). Since this model is meant to apply uniformly across every login method, not just the low-friction ones available today, justifying it by any one method's friction doesn't hold up as new methods are added. A sufficiently *long* fixed TTL captures most of the same practical benefit instead — an active user rarely hits the cap regardless of method — without the added complexity, and a fixed maximum session lifetime is a defensible security practice on its own terms: it bounds how long any single authentication event, compromised or not, stays valid without a fresh proof of identity. |
 
 ## Open Questions & Future Decisions
 

@@ -20,6 +20,18 @@ surface and behavior, not the backend architecture it calls into.
 
 ## Interface
 
+```python
+def get_current_user(headers: Mapping[str, str]) -> Identity | None:
+    ...
+
+@dataclass
+class Identity:
+    user_id: str
+    # name, picture, email: included only if the full-profile-vs-
+    # identity-only question (see uauth-service/sessions § Open Questions)
+    # resolves toward full profile — not yet decided.
+```
+
 `getCurrentUser(headers)` takes the incoming request's headers (containing
 the bearer access token), signs and sends a verification request to
 uauth-service via the AWS SDK's SigV4 signing (available for free since the
