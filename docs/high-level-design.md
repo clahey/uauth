@@ -184,7 +184,7 @@ Comparing the three by the specific flows this project needs, rather than by gen
 - **Passkeys**: comparable effort to A/B once their vendor-specific open questions (Cognito's unconfirmed export API, SuperTokens' unconfirmed pricing tier) are counted as real integration risk rather than assumed-free.
 - **What Option C uniquely costs**: token issuance, refresh rotation, and revocation become our responsibility end-to-end — library help on the cryptography, but no vendor/security-team backstop on the orchestration logic. That is the genuine tradeoff, not "reimplementing cryptography," which the library ecosystem already covers.
 
-Net: Option C's *incremental* custom-code burden over what A or B already force onto us (Lambda-trigger-shaped glue either way, for the Android and linking flows specifically) is modest, and it's the only option that fully satisfies both the serverless-native goal and the "uauth itself is open source" goal without caveats.
+Net: Option C's *incremental* custom-code burden over what A or B already force onto us (Lambda-trigger-shaped glue either way, for the Android and linking flows specifically) is modest — see *Authentication mechanism* under Key Design Decisions for the full decision and rationale.
 
 ### Authorization engine reference notes
 
@@ -233,13 +233,10 @@ zero-setup, which reaches into that project's business logic (out of scope),
 and would work against different projects needing different authorization
 approaches (see Goals).
 
-A related idea — a data-access layer with a mandated schema and sharing
-constraints enforced automatically inside read/write primitives (e.g. a
-`readDBRow` helper) — is a legitimate concept, but a different kind of
-project: it would need to own DB schema and query conventions, with its own
-release cadence and opt-in audience. Like any authorization approach, it
-would consume uauth's identity output and need nothing else from uauth (see
-the *Minimal, stable identity surface* Tenet).
+A related idea — a data-access layer with a mandated schema and automatic
+sharing-constraint checks (see Non-Goals) — would, as its own project, need
+to own DB schema and query conventions with its own release cadence and
+opt-in audience, distinct from uauth's.
 
 ### Open questions on these options
 
@@ -260,142 +257,22 @@ Sources referenced while researching these options:
 
 ## System Design
 
-### Client-facing API (untrusted)
+uauth is three top-level components, each detailed in its own design subtree
+under `docs/intent/`:
 
-Client SDKs run as untrusted code from the server's perspective — nothing they
-assert about identity is trusted directly; the business logic server always
-verifies independently (see *Server-side identity check* below).
-
-- One concrete function per supported login method (e.g. `loginWithGoogle()`,
-  `loginWithPassword(...)`, `loginWithOtp(...)`, `loginWithPasskey()`), plus
-  `logout()`. See *Login methods* below for why this is per-method functions
-  rather than one generic, pluggable `login(method, ...)` entry point.
-- `getCurrentUser()` — returns display information for the current user. For
-  now this is a pass-through of whatever the login provider supplies (e.g.
-  Google's `name`, `picture`, `email` claims) — no custom-settable profile
-  fields yet. Token access is a separate accessor (e.g. `getToken()`), not a
-  static field on the returned user object, since access tokens are
-  short-lived and must be fetched fresh at the point of use, refreshing
-  transparently under the hood as needed.
-- Link/unlink authentication methods on the current account (per Goals; shape not
-  yet elaborated).
-- A convenience authenticated-HTTP-request helper that attaches the current token
-  to an outgoing request automatically is a secondary, nice-to-have addition — a
-  thin wrapper over the token accessor plus the platform's native HTTP client
-  (e.g. a `fetch` wrapper in JS/TS, an OkHttp/Ktor interceptor in Kotlin), not a
-  uauth-owned primitive or a single cross-platform implementation.
-
-### Login methods
-
-Each supported login method has its own client-side ceremony, but all of them
-converge on the same backend contract: the client obtains proof of identity for
-that method, hands it to uauth in one call, and receives uauth's own session
-tokens in return.
-
-- **Google (OIDC)** — the client does not talk to uauth first. On Android,
-  Google's native SDK (Credential Manager / Google Identity Services) presents a
-  native account picker and returns a Google-signed ID token directly, no
-  browser involved; on web, the standard OIDC redirect flow (authorization code
-  exchanged for tokens) applies instead. Either way, the client sends the
-  resulting Google ID token to uauth, which verifies its signature against
-  Google's public JWKS and checks `iss`/`aud`/`exp` before issuing uauth's own
-  tokens.
-- **Email/password** — no external ceremony. The client sends credentials
-  directly to uauth in one call; uauth checks the stored password hash and
-  issues tokens.
-- **OTP** — two API round trips, no external ceremony: the client requests a
-  code (delivered via SES/SNS), then submits the code back for verification.
-- **Passkeys (WebAuthn)** — uauth issues a random challenge, the client passes
-  it to the platform's native WebAuthn API (not a third-party SDK), and returns
-  the resulting signed assertion to uauth for verification.
-
-Each method is exposed as its own concrete client function rather than a single
-generic, pluggable `login(method, ...)` entry point, since the set of supported
-methods is closed and owned by uauth itself — not something a consuming project
-supplies its own implementation of. uauth's backend verifies each method's proof
-via its own internal strategy (JWKS check, password hash check, OTP check,
-WebAuthn verification); this is an implementation detail of uauth, not exposed
-integration surface.
-
-### Server-side identity check
-
-The business logic server has no ambient session — identity is derived per
-request from the bearer token in the incoming request's headers. Each supported
-server language gets a small library exposing a stable interface (e.g.
-`getCurrentUser(headers)`) that returns verified identity for the request. See
-*Server-side identity verification* under Key Design Decisions for how that
-interface is implemented and why.
-
-### API surfaces and abuse protection
-
-uauth exposes two distinct API surfaces behind the same underlying
-implementation. Which surface a given route belongs to is enforced at the API
-Gateway route level (authorization type is set per method), not by splitting
-into separate Lambda functions — though the implementation may still be
-organized as multiple functions sharing common code.
-
-- **Public, client-facing** — login, logout, refresh, profile read. Called
-  directly by untrusted clients (mobile apps, browsers), which hold no AWS
-  credentials, over plain HTTPS with no IAM authorization.
-- **Server-to-server verification** — called by a consuming project's business
-  logic Lambda to check a request's bearer token (see *Server-side identity
-  check* above). IAM-authenticated (see *Server-side identity verification*
-  under Key Design Decisions).
-
-The two surfaces need different protection against abuse:
-
-- The public surface is uauth's own direct front door — no business server
-  sits in front of it to absorb traffic — so it needs its own throttling (API
-  Gateway usage plans, optionally AWS WAF). For Google-only login, the
-  credential material itself (a Google-signed ID token) isn't guessable, so
-  the exposure is cost/DoS from request volume rather than credential
-  stuffing, and throttling covers it. Password login, once added, needs real
-  brute-force defenses on top of that (per-account lockout/backoff, not just
-  per-IP rate limiting, since attacks distribute across IPs). Refresh tokens
-  are high-entropy opaque strings and aren't brute-forceable, but a burst of
-  failed refresh attempts against one session is a theft signal worth
-  monitoring.
-- The verification surface sits behind each consuming project's business
-  logic server, which must already protect its own public API from abuse
-  regardless of uauth's design — that protection also caps how much traffic
-  can ever reach uauth's verification endpoint via a relay, since a
-  legitimate, authorized business server will relay whatever it receives,
-  including an attacker's garbage tokens. IAM authorization on this route
-  doesn't add meaningful abuse protection on top of that; its value is
-  identifying the calling project, which lets uauth apply a per-project usage
-  plan to contain one project's traffic (malicious or buggy) from degrading
-  verification capacity for every other project.
-
-### Sessions and tokens
-
-Access tokens and refresh tokens play different roles and are shaped
-differently:
-
-- **Access tokens** are short-lived, self-contained JWTs. They are proof that a
-  session was valid recently, not the session itself — their short TTL bounds
-  exposure if one leaks, and their self-contained signature lets them be
-  verified without a database lookup for the common case.
-- **Refresh tokens are the session.** Each successful login, regardless of
-  method, creates one session — one refresh token tied to one device/client
-  instance — recorded server-side in a sessions table (DynamoDB). See *Refresh
-  tokens are opaque, not JWTs* under Key Design Decisions for why refresh
-  tokens are random opaque strings rather than JWTs.
-
-A session record holds: session ID, user ID, a hash of the refresh token (never
-the raw value, same principle as never storing a plaintext password), device/
-client metadata (for a "your active devices" view), created-at/last-used
-timestamps, and a revoked flag.
-
-Refresh tokens rotate on every use: each refresh issues a new refresh token and
-invalidates the one just used. If an already-rotated-out refresh token is ever
-presented again, that's a signal of token theft, and the entire session is
-revoked.
-
-The sessions table is only touched at login, refresh, logout, and when listing
-active devices — not on every regular request, which is what keeps per-request
-access-token verification cheap regardless of whether that verification happens
-locally or via network call (see *Server-side identity verification* under Key
-Design Decisions).
+- **uauth-service** — the backend: verifies proof of identity per login
+  method, issues and manages sessions, owns the account/identity data model,
+  and exposes it through two API surfaces (a public client-facing surface,
+  and an IAM-authenticated server-to-server verification surface). See
+  `docs/intent/uauth-service/uauth-service-design.md` and its children
+  (login-methods, sessions, accounts).
+- **client-sdk** — the untrusted client libraries (Android/Kotlin, web/TS)
+  implementing the shared login/logout/getCurrentUser/getToken contract. See
+  `docs/intent/client-sdk/client-sdk-design.md` and its children (android,
+  web).
+- **server-sdk** — the per-language library (Python first) a consuming
+  project's business logic server uses to verify identity on incoming
+  requests. See `docs/intent/server-sdk/server-sdk-design.md`.
 
 ## Key Design Decisions
 
@@ -442,83 +319,12 @@ consuming projects depend only on uauth's standard identity API (see *Minimal,
 stable identity surface* Tenet), so the backing mechanism could migrate to Cognito
 or SuperTokens later without changing what downstream projects integrate against.
 
-### Server-side identity verification: network call, not local verification
-
-Business logic servers verify identity via a network call to a dedicated uauth
-verification API, rather than each server verifying JWTs locally/in-process
-(e.g. fetching and caching uauth's public JWKS and checking signatures itself).
-This sits behind each language's `getCurrentUser(headers)`-shaped library (see
-*Server-side identity check* under System Design), so the network-vs-local choice
-is an internal implementation detail, not part of the contract callers depend on.
-
-The verification endpoint runs as a Lambda behind an API Gateway **REST API**
-(not HTTP API), authenticated via IAM (SigV4). REST APIs support cross-account
-IAM authorization through resource policies that name a calling account or role
-directly; HTTP APIs don't support this and would need an extra `sts:AssumeRole`
-hop for a consuming project in a different AWS account to call in. Both uauth's
-verification Lambda and each consuming project's business logic Lambda stay
-independently serverless — this introduces a network hop, not an always-on
-process.
-
-IAM authorization here identifies the calling project rather than
-establishing trust in its claims — verification correctness depends only on
-the bearer token presented, not on who's asking. What caller identification
-buys is a per-project usage-plan throttle, containing one project's traffic
-(malicious or buggy) from degrading verification capacity for every other
-project; see *API surfaces and abuse protection* under System Design.
-
-**Alternatives considered:**
-
-- **Local/in-process JWKS verification** — not rejected outright, but not the
-  default. Its advantages are real: no per-request latency, no live availability
-  dependency on uauth, and graceful degradation if uauth has an outage (a cached
-  public key keeps working). Its cost is that it requires a maintained JWT/JWKS
-  verification implementation in every language a consuming project happens to
-  use, which multiplies uauth's own maintenance surface across independent
-  projects — the opposite of the "one implementation" goal. Because it sits
-  behind the same stable interface, it remains available as a per-project
-  escape hatch later if the network-call cost proves to be a real problem for
-  a specific project, without requiring a contract change for its callers.
-
-**Rationale:** a single, centrally-maintained verification implementation is
-more valuable than per-language reimplementations, especially for a solo-
-maintained set of independent projects built with heavy AI-agent use, where
-duplicated verification logic per language is duplicated risk with no one
-reviewing it closely. This also benefits from concurrency concentration:
-because identity checks are fast relative to typical business-logic work, the
-verification tier needs far fewer concurrent warm instances than the
-business-logic tier calling it (concurrency needed scales with arrival rate ×
-service duration), so whatever it caches — signing keys, hot lookups — stays
-warmer than if the same cache were fragmented cold across every business
-Lambda. The accepted cost is that uauth's own operational health (a bad
-deploy, throttling, a DB-side issue, cross-account IAM misconfiguration)
-becomes a live, shared dependency for every consuming project's requests at
-once — judged an acceptable risk at this project's solo-maintained, modest
-scale, especially given the interface leaves room to swap in local
-verification per project later if that judgment turns out to be wrong.
-
-### Refresh tokens are opaque, not JWTs
-
-uauth's refresh tokens are opaque random strings looked up against a
-server-side sessions table, not self-contained JWTs. Access tokens remain
-self-contained JWTs.
-
-**Alternatives considered:**
-
-- **Self-contained JWT refresh tokens** — rejected. A refresh token that's just
-  a signed JWT can't be revoked before it naturally expires without an explicit
-  revocation check on every use, which erases the "no DB lookup" benefit that
-  motivates using a JWT in the first place. Refresh tokens live far longer than
-  access tokens, so an unrevocable window is a much larger risk here than it is
-  for access tokens.
-
-**Rationale:** an opaque token forces a server-side lookup on every refresh,
-which is acceptable because refresh happens rarely — roughly once per
-access-token TTL — rather than on every request. That lookup is also the
-natural place to add rotation (issue a new refresh token on every use,
-invalidate the one just used) and reuse detection (an already-rotated-out
-token being presented again signals theft), giving instant, reliable
-revocation exactly where it matters most, without adding any per-request cost.
+Two decisions that follow directly from this one — how business servers verify
+identity (network call vs. local verification), and why refresh tokens are
+opaque rather than JWTs — are recorded where their substance lives: see
+`docs/intent/uauth-service/uauth-service-design.md` § Key Design Decisions and
+`docs/intent/uauth-service/sessions/sessions-design.md` § Decisions &
+Alternatives.
 
 ## Success Metrics
 
