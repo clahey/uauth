@@ -93,6 +93,10 @@ mechanism* under Key Design Decisions.
 
 ## Non-Goals
 
+### Scope boundaries
+
+Features or responsibilities uauth does not build or take on.
+
 - Running uauth-service itself as a traditional always-on process (e.g. a
   long-lived container or VM-hosted server) is out of scope (see Goals). This
   doesn't constrain how a consuming project runs its own business logic
@@ -129,14 +133,19 @@ mechanism* under Key Design Decisions.
   don't get MFA for free from a third party.
 - Account recovery flows (e.g. forgot-password) are out of scope until
   password/OTP login is real; not needed while OIDC is the only login method.
-- Depending on closed-source software anywhere in the client (Android app or
-  website) is out of scope, without exception.
+
+### Rejection criteria
+
+Properties that disqualify a dependency — a vendor, a library, a hosting
+choice — regardless of how otherwise good it is. Not a boundary on what
+uauth itself builds.
+
 - Depending on a fully closed-source vendor/server (for authentication or
-  otherwise) is out of scope, with the AWS-native-primitive exception defined
+  otherwise) is unacceptable, with the AWS-native-primitive exception defined
   in Tenets.
-- Paying a vendor add-on with a high fixed monthly minimum (e.g. a $100/month
-  floor per feature) is unacceptable, regardless of how good the feature
-  otherwise is — this rules out per-feature add-ons priced that way (e.g. paid
+- A vendor add-on with a high fixed monthly minimum (e.g. a $100/month floor
+  per feature) is unacceptable regardless of how good the feature otherwise
+  is — this rules out per-feature add-ons priced that way (e.g. paid
   account-linking or MFA tiers), not just the vendor overall.
 
 ## Tenets
