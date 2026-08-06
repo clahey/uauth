@@ -8,10 +8,10 @@ from an Android app because of this coupling. More broadly, every authentication
 system evaluated so far has been either an assembly of disconnected pieces requiring
 custom integration, tied to one particular server structure, or closed source.
 uauth exists to find or build a reusable authentication system, decoupled from any
-single server, that can serve multiple independent projects (starting with the
-existing GraphQL project) across multiple client surfaces without re-solving login
-from scratch each time. Authorization — what an authenticated user is allowed to
-do — is a related but deliberately separate concern; see Non-Goals.
+single server, that can serve multiple independent projects across multiple client
+surfaces without re-solving login from scratch each time. Authorization — what an
+authenticated user is allowed to do — is a related but deliberately separate
+concern; see Non-Goals.
 
 ## Approach
 
@@ -38,8 +38,7 @@ mechanism* under Key Design Decisions.
 - **Consuming projects** — multiple independent projects/servers, built and
   maintained by a solo developer (working with heavy use of AI coding agents),
   each integrating uauth as a shared authentication layer instead of
-  reimplementing its own. The existing GraphQL project is the first intended
-  adopter.
+  reimplementing its own.
 
 ## Goals
 
@@ -55,21 +54,30 @@ mechanism* under Key Design Decisions.
   SOAP/XML) is acceptable if it's genuinely the better choice. This is independent
   of whatever paradigm a consuming project's own business logic server uses toward
   its own clients (see Non-Goals).
-- The business logic server runs serverless (e.g. AWS Lambda), not as a long-lived
-  server process. AWS is the default target given existing team familiarity;
-  reasonable portability to another provider is a soft preference, not a hard
-  requirement — don't sacrifice AWS-native fit to chase portability.
-- Support for OIDC providers beyond Google, for OTP or traditional
-  username/password login, and for passkeys, is a goal but not a must-have for
-  initial scope — Google login is the must-have; these are nice-to-have
-  extensions.
+- uauth-service (uauth's own backend) runs serverless (e.g. AWS Lambda), not as
+  a long-lived server process. AWS is the default target given existing team
+  familiarity; reasonable portability to another provider is a soft
+  preference, not a hard requirement — don't sacrifice AWS-native fit to chase
+  portability. This constrains uauth's own architecture only — see Non-Goals
+  for why it doesn't extend to how a consuming project runs its business logic
+  server.
+- OIDC providers beyond Google, OTP, traditional username/password login, and
+  passkeys are future scope — Google login is the only login method being
+  built now. This isn't optional polish: the architecture must be able to
+  support adding these methods later without a redesign, which constrains
+  current design work even though none of them are implemented yet (see
+  uauth-service/login-methods for how each is currently scoped).
 - uauth itself is intended to be open source (not just built on open-source
   dependencies) — worth designing with a general-purpose, publishable API rather
   than only what's minimally needed for one project.
 - Users can link and unlink multiple authentication methods (e.g. Google, another
   OIDC provider, password) to a single account.
-- Clients authenticate to the (stateless, serverless) backend using JWT bearer
-  tokens.
+- Clients authenticate to the (stateless, serverless) backend using
+  short-lived JWT access tokens as bearer tokens. This is distinct from the
+  session itself: refresh tokens (what a login actually produces and what
+  persists between app runs) are opaque, not JWTs — see
+  uauth-service/sessions for the full access/refresh split and why they're
+  shaped differently.
 - uauth's identity output (a stable, canonical user ID plus standard claims) is
   sufficient on its own for a consuming project to build any authorization model
   it needs, including sharing/collaboration between users (not strict
@@ -85,8 +93,14 @@ mechanism* under Key Design Decisions.
 
 ## Non-Goals
 
-- Running the business logic server as a traditional always-on process (e.g. a
-  long-lived container or VM-hosted server) is out of scope.
+- Running uauth-service itself as a traditional always-on process (e.g. a
+  long-lived container or VM-hosted server) is out of scope (see Goals). This
+  doesn't constrain how a consuming project runs its own business logic
+  server — uauth's verification API is called via IAM/SigV4, which any
+  AWS-credentialed caller can do whether it's a Lambda or a traditional
+  long-running server; a consuming project's architecture is its own choice
+  (see *Building or maintaining any individual consuming project's business
+  logic server* below).
 - Guaranteed portability across cloud providers is not a requirement. Code that is
   reasonably reusable elsewhere is a bonus, not a design driver.
 - Role-based / org / team / admin-hierarchy authorization is not needed by any
