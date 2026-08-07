@@ -33,10 +33,9 @@ differently:
 A session record holds: session ID, user ID, a hash of the current refresh
 token plus a hash of the immediately-previous one with its supersession
 timestamp (never the raw token values, same principle as never storing a
-plaintext password — see Rotation concurrency and recovery for why one prior
-generation is kept), device/client metadata (for a "your active devices"
-view), created-at/last-used timestamps, a fixed expiration timestamp (see
-Retention), and a revoked flag.
+plaintext password — § Rotation concurrency and recovery), device/client
+metadata (for a "your active devices" view), created-at/last-used
+timestamps, a fixed expiration timestamp (§ Retention), and a revoked flag.
 
 ## Rotation and revocation
 
@@ -48,37 +47,32 @@ is revoked.
 The sessions table is only touched at login, refresh, logout, and when
 listing active devices — not on every regular request, which is what keeps
 per-request access-token verification cheap regardless of whether that
-verification happens locally or via network call (see uauth-service § Key
+verification happens locally or via network call (uauth-service § Key
 Design Decisions).
 
 A burst of failed refresh attempts against one session is a theft signal
 worth monitoring, since valid refresh tokens are high-entropy and not
-realistically guessable (see uauth-service § Abuse protection).
+realistically guessable (uauth-service § Abuse protection).
 
 ## Rotation concurrency and recovery
 
 Two near-simultaneous refresh calls presenting the same token (e.g. a client
-retry racing the original request) are resolved with a conditional write:
-rotation updates the session's stored refresh-token hash only if it still
-matches the presented token, so only one of two concurrent calls can win and
-actually rotate.
+retry racing the original request) are resolved by the conditional write
+(§ Sequences → Refresh): only one of the two can win and actually rotate.
 
-The loser isn't treated as theft. If the token it presents matches the
-session's stored *immediately-previous* hash and is within the grace window,
-the server doesn't rotate again — it returns the session's current refresh
-token (the one the winning call already produced) instead of minting a new
-one. Both calls converge on holding the identical current token; the client
-just stores whatever refresh token it's given, so this needs no special
-handling client-side. This convergence is what keeps the race from forking
-session state into two valid tokens, and it's why the session record keeps
-one prior generation (see Session record) rather than just the current
-token.
+The loser isn't treated as theft. Both calls converge on holding the
+identical current token — the client just stores whatever refresh token it's
+given, so this needs no special handling client-side. This convergence is
+what keeps the race from forking session state into two valid tokens, and
+it's why the session record keeps one prior generation (§ Session record)
+rather than just the current token.
 
-A token presented *outside* the grace window, or more than one generation
+A token presented outside the grace window, or more than one generation
 behind, doesn't get this treatment — a legitimate single owner would never
 present a token that stale, so it's treated as genuine reuse of a token
-that's supposed to be dead, and the session is revoked. The grace window's
-duration is a tuning parameter, not yet chosen (see Open Questions).
+that's supposed to be dead, and the session is revoked (§ Sequences →
+Refresh). The grace window's duration is a tuning parameter, not yet chosen
+(§ Open Questions).
 
 If the client never receives the response carrying a freshly-rotated refresh
 token (a crash or dropped connection after the server-side write), no
@@ -95,7 +89,7 @@ used. An actively-used session still eventually requires a full re-login
 once the fixed window elapses; an abandoned session expires on the same
 schedule. This keeps expiration independent of any definition of "activity,"
 and applies uniformly across every login method rather than depending on any
-one method's friction (see Decisions & Alternatives for the full reasoning).
+one method's friction (§ Decisions & Alternatives).
 
 Revoked and expired session records are removed via a DynamoDB TTL
 attribute, not an active cleanup job — the record is written with an
@@ -103,11 +97,43 @@ expiration timestamp (this fixed session lifetime, or, for a revoked
 session, revocation time plus a short retention window for audit purposes)
 and DynamoDB garbage-collects it natively.
 
+## Sequences
+
+Ordered steps only — rationale in § Rotation concurrency and recovery and
+§ Retention.
+
+### Refresh
+
+1. Client sends `POST /refresh` with its current refresh token.
+2. sessions looks up the session by the token's hash.
+   - If the token matches the session's *current* hash, sessions rotates:
+     it generates a new refresh token and conditionally writes it as the
+     current hash — only if the stored hash still matches the presented
+     token — moving the old current hash to previous, with a supersession
+     timestamp, and mints a new access token.
+   - If the token matches the session's *immediately-previous* hash and is
+     within the grace window, sessions returns the session's current access
+     and refresh tokens without rotating again.
+   - Otherwise (no match, or a previous-hash match outside the grace
+     window), sessions revokes the session and returns
+     `{ error: "invalid_session" }`.
+3. On either successful branch, sessions returns
+   `{ accessToken, refreshToken }` — the client stores whatever it's given,
+   without needing to distinguish a freshly-rotated token from a
+   grace-window one.
+
+### Logout
+
+1. Client sends `POST /logout` with its current refresh token.
+2. sessions revokes the session identified by the token's hash.
+3. sessions returns `{}`. The client clears local state regardless of
+   whether the call succeeds.
+
 ## Interface
 
 | Endpoint | Method | Auth | Request | Response |
 |---|---|---|---|---|
-| `/refresh` | POST | none (the refresh token itself is the credential) | `{ refreshToken: string }` | Success: `{ accessToken: string, refreshToken: string }` — the returned `refreshToken` is either newly-rotated or, in the grace-window case, the session's already-current one (see Rotation concurrency and recovery); the client always just stores whatever it's given. Failure: `{ error: "invalid_session" }` if the token is unknown, expired, or reused outside the grace window. |
+| `/refresh` | POST | none (the refresh token itself is the credential) | `{ refreshToken: string }` | Success: `{ accessToken: string, refreshToken: string }` — the returned `refreshToken` is either newly-rotated or, in the grace-window case, the session's already-current one (§ Rotation concurrency and recovery); the client always just stores whatever it's given. Failure: `{ error: "invalid_session" }` if the token is unknown, expired, or reused outside the grace window. |
 | `/logout` | POST | none (the refresh token itself is the credential) | `{ refreshToken: string }` | `{}` — revokes the session identified by the refresh token. Best-effort from the client's perspective: local state is cleared regardless of whether this call succeeds. |
 
 The access token returned by `/refresh` is a JWT whose payload includes at

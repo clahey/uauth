@@ -16,6 +16,13 @@ covers the contract itself.
 
 ## Shared contract
 
+- Every platform's SDK requires configuration with the consuming project's
+  own registered `googleWebClientId` (see uauth-service/login-methods §
+  Google client registration) before `loginWithGoogle()` can be called —
+  this determines both the Google consent-screen branding the user sees and
+  what uauth-service checks the login against. The configuration mechanism
+  is platform-specific (see android and web § SDK configuration / Google
+  login ceremony) and not yet decided for either platform.
 - One concrete function per supported login method (e.g. `loginWithGoogle()`),
   plus `logout()`. See Key Design Decisions below for why this is per-method
   functions rather than a generic, pluggable `login(method, ...)` entry
@@ -45,7 +52,7 @@ in each platform's language.
 
 | Function | Params | Returns | Notes |
 |---|---|---|---|
-| `loginWithGoogle` | none | Success: a `CurrentUser`. Failure: nothing — a "not logged in" outcome, not an exception (see android § Login failure and recovery for the reasoning, which applies to web too). | See Key Design Decisions above for why this is a dedicated function per method. |
+| `loginWithGoogle` | none at this contract level; platform-specific UI-anchoring params may be required (e.g. android needs an `Activity`) — see each platform's own Interface section | Success: a `CurrentUser`. Failure: nothing — a "not logged in" outcome, not an exception (see android § Login failure and recovery for the reasoning, which applies to web too). | See Key Design Decisions above for why this is a dedicated function per method. |
 | `logout` | none | nothing | Clears local state regardless of whether the server call succeeds. |
 | `getCurrentUser` | none | a `CurrentUser` if logged in, otherwise nothing | Synchronous — reads profile data cached at login, no network call. |
 | `getToken` | none | a valid access token string if logged in, otherwise nothing | Asynchronous — refreshes transparently if the cached access token is stale. Returns nothing if the session is dead (refresh failed), signaling the caller to treat the user as logged out. |
